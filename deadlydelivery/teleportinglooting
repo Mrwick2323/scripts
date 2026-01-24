@@ -1,0 +1,258 @@
+-- LocalScript
+
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+local DROP_POSITION = Vector3.new(-311, 324, 409)
+local running = false -- flag to control toggle
+
+--------------------------------------------------
+-- GUI
+--------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoRunGui"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 300, 0, 50)
+button.Position = UDim2.new(0, 20, 0, 80)
+button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.BorderSizePixel = 0
+button.Text = "Run Interact + Loot"
+button.Parent = gui
+
+--------------------------------------------------
+-- UTIL
+--------------------------------------------------
+local function getCharacter() return player.Character or player.CharacterAdded:Wait() end
+local function getRoot() return getCharacter():WaitForChild("HumanoidRootPart") end
+
+local function teleport(cf, yOffset)
+	local root = getRoot()
+	root.CFrame = cf + Vector3.new(0, yOffset, 0)
+	task.wait(0.15)
+end
+
+local function teleportToPosition(pos)
+	local root = getRoot()
+	root.CFrame = CFrame.new(pos + Vector3.new(0, 2, 0))
+	task.wait(0.15)
+end
+
+local function pressKey(key)
+	VirtualInputManager:SendKeyEvent(true, key, false, game)
+	task.wait(0.05)
+	VirtualInputManager:SendKeyEvent(false, key, false, game)
+end
+
+local function getObjectCFrame(obj)
+	if obj:IsA("Model") then
+		return obj.PrimaryPart and obj.PrimaryPart.CFrame or obj:FindFirstChildWhichIsA("BasePart", true) and obj:FindFirstChildWhichIsA("BasePart", true).CFrame
+	elseif obj:IsA("Tool") then
+		return obj:FindFirstChild("Handle") and obj.Handle.CFrame
+	end
+	return nil
+end
+
+local function getObjectPosition(obj)
+	if obj:IsA("Model") then
+		local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+		if part then return part.Position end
+	elseif obj:IsA("Tool") then
+		local handle = obj:FindFirstChild("Handle")
+		if handle then return handle.Position end
+	end
+	return nil
+end
+
+local function distance(pos1, pos2)
+	return (pos1 - pos2).Magnitude
+end
+
+--------------------------------------------------
+-- MAKE CHARACTER INVISIBLE
+--------------------------------------------------
+local function makeCharacterInvisible()
+	local char = getCharacter()
+	for _, obj in ipairs(char:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			obj.LocalTransparencyModifier = 1
+			obj.CanCollide = false
+		elseif obj:IsA("Decal") then
+			obj.Transparency = 1
+		end
+	end
+end
+
+--------------------------------------------------
+-- REPEATED TELEPORT HELPER
+--------------------------------------------------
+local function stayAtPosition(targetPos, duration, action)
+	local root = getRoot()
+	local startTime = os.clock()
+	while os.clock() - startTime < duration do
+		if not running then break end -- exit early if stopped
+		root.CFrame = CFrame.new(targetPos)
+		if action then action() end
+		RunService.RenderStepped:Wait()
+	end
+end
+
+--------------------------------------------------
+-- INTERACTIVE INTERACTIONS
+--------------------------------------------------
+local function faceAndInteract(obj)
+	local cf = getObjectCFrame(obj)
+	if not cf then return end
+	local root = getRoot()
+	local startTime = os.clock()
+	while os.clock() - startTime < 0.6 do
+		if not running then break end
+		root.CFrame = CFrame.new(root.Position, cf.Position)
+		pressKey(Enum.KeyCode.E)
+		RunService.RenderStepped:Wait()
+	end
+end
+
+--------------------------------------------------
+-- LOOT PICKUP (SPAM + LOOK)
+--------------------------------------------------
+local function spamPickupEWithLook(loot, duration)
+	local pos = getObjectPosition(loot)
+	if not pos then return end
+	stayAtPosition(pos + Vector3.new(0, 6, 0), duration, function()
+		camera.CFrame = CFrame.lookAt(camera.CFrame.Position, pos)
+		pressKey(Enum.KeyCode.E)
+	end)
+end
+
+--------------------------------------------------
+-- LOCAL DELETE (INTERACTIVES ONLY)
+--------------------------------------------------
+local function localDelete(obj)
+	if obj and obj.Parent then
+		pcall(function() obj:Destroy() end)
+	end
+end
+
+--------------------------------------------------
+-- MAIN RUN / TOGGLE
+--------------------------------------------------
+button.MouseButton1Click:Connect(function()
+	if running then
+		-- stop process if running
+		running = false
+		button.Text = "Stopping..."
+		return
+	end
+
+	-- start process
+	running = true
+	button.Text = "Running..."
+
+	makeCharacterInvisible()
+
+	local gameSystem = Workspace:FindFirstChild("GameSystem")
+	if not gameSystem then
+		button.Text = "GameSystem not found"
+		running = false
+		return
+	end
+
+	-- STEP 1: Interactives
+	local interactiveFolder = gameSystem:FindFirstChild("InteractiveItem")
+	local interactivesToDelete = {}
+	if interactiveFolder then
+		for _, obj in ipairs(interactiveFolder:GetChildren()) do
+			if not running then break end
+			local cf = getObjectCFrame(obj)
+			if cf then
+				teleport(cf, 2)
+				faceAndInteract(obj)
+				table.insert(interactivesToDelete, obj)
+			end
+		end
+
+		-- wait a few seconds
+		if running then task.wait(2) end
+
+		-- delete all interactives locally
+		for _, obj in ipairs(interactivesToDelete) do
+			if not running then break end
+			localDelete(obj)
+		end
+	end
+
+	-- STEP 2: Loot LOOP
+	local lootsFolder = gameSystem:FindFirstChild("Loots")
+	if lootsFolder then
+		local worldLoot = lootsFolder:FindFirstChild("World")
+		if worldLoot then
+			while running do
+				local lootBatch = {}
+				local lootCount = 0
+
+				-- collect loot farther than 20 studs from drop
+				for _, loot in ipairs(worldLoot:GetChildren()) do
+					if not running then break end
+					local pos = getObjectPosition(loot)
+					if pos and distance(pos, DROP_POSITION) > 20 then
+						table.insert(lootBatch, loot)
+						lootCount += 1
+						if lootCount >= 4 then break end
+					end
+				end
+
+				if #lootBatch == 0 then break end
+
+				-- loot each item
+				for _, loot in ipairs(lootBatch) do
+					if not running then break end
+					spamPickupEWithLook(loot, 0.6)
+				end
+
+				-- teleport to drop and press sequence
+				if not running then break end
+				teleportToPosition(DROP_POSITION)
+				local dropSequence = {
+					Enum.KeyCode.One,
+					Enum.KeyCode.G,
+					Enum.KeyCode.Two,
+					Enum.KeyCode.G,
+					Enum.KeyCode.Three,
+					Enum.KeyCode.G,
+					Enum.KeyCode.Four,
+					Enum.KeyCode.G
+				}
+				for _, key in ipairs(dropSequence) do
+					if not running then break end
+					pressKey(key)
+					task.wait(0.1)
+				end
+
+				-- continue loop if there are still loot items >20 studs away
+				if not running then break end
+				local lootLeft = false
+				for _, loot in ipairs(worldLoot:GetChildren()) do
+					local pos = getObjectPosition(loot)
+					if pos and distance(pos, DROP_POSITION) > 20 then
+						lootLeft = true
+						break
+					end
+				end
+				if not lootLeft then break end
+			end
+		end
+	end
+
+	button.Text = "Done"
+	running = false
+end)
