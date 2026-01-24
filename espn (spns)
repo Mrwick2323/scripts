@@ -1,0 +1,198 @@
+-- LocalScript
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+--------------------------------------------------
+-- CONFIG
+--------------------------------------------------
+local COLORS = {
+	Loot = Color3.fromRGB(255, 221, 0),        -- Yellow
+	Interactive = Color3.fromRGB(0, 170, 255), -- Blue
+	Monster = Color3.fromRGB(255, 60, 60),     -- Red
+}
+
+--------------------------------------------------
+-- GUI
+--------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "HighlighterGui"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 220, 0, 50)
+button.Position = UDim2.new(0, 20, 0, 20)
+button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.BorderSizePixel = 0
+button.Text = "ESP: OFF"
+button.Parent = gui
+
+--------------------------------------------------
+-- STATE
+--------------------------------------------------
+local enabled = false
+local connections = {}
+
+--------------------------------------------------
+-- HIGHLIGHT HELPERS
+--------------------------------------------------
+local function addHighlightToAdornee(adornee, color)
+	if not adornee or adornee:FindFirstChild("ESPHighlight") then return end
+
+	local h = Instance.new("Highlight")
+	h.Name = "ESPHighlight"
+	h.Adornee = adornee
+	h.FillColor = color
+	h.OutlineColor = Color3.new(1, 1, 1)
+	h.FillTransparency = 0.45
+	h.OutlineTransparency = 0
+	h.Parent = adornee
+end
+
+-- Tool-safe highlight
+local function highlightObject(obj, color)
+	if obj:IsA("Model") then
+		addHighlightToAdornee(obj, color)
+
+	elseif obj:IsA("Tool") then
+		local handle = obj:FindFirstChild("Handle")
+		if handle and handle:IsA("BasePart") then
+			addHighlightToAdornee(handle, color)
+		end
+	end
+end
+
+--------------------------------------------------
+-- PULSE REHIGHLIGHT (STREAMING FIX)
+--------------------------------------------------
+local function pulseRehighlight(gameSystem)
+	task.spawn(function()
+		while enabled do
+			-- Disable for one frame
+			removeHighlights(gameSystem)
+			task.wait() -- 1 frame
+
+			if not enabled then break end
+
+			-- Re-enable
+			-- Loot
+			local loots = gameSystem:FindFirstChild("Loots")
+			if loots then
+				local world = loots:FindFirstChild("World")
+				highlightFolder(world, COLORS.Loot)
+			end
+
+			-- Interactive
+			highlightFolder(gameSystem:FindFirstChild("InteractiveItem"), COLORS.Interactive)
+
+			-- Monsters
+			highlightFolder(gameSystem:FindFirstChild("Monsters"), COLORS.Monster)
+
+			task.wait(0.3) -- pulse rate (adjustable)
+		end
+	end)
+end
+
+--------------------------------------------------
+-- STREAMING FIX (RE-HIGHLIGHT ON RETURN)
+--------------------------------------------------
+local function periodicRescan(gameSystem)
+	task.spawn(function()
+		while enabled do
+			task.wait(1) -- light + safe
+
+			-- Loot
+			local loots = gameSystem:FindFirstChild("Loots")
+			if loots then
+				local world = loots:FindFirstChild("World")
+				highlightFolder(world, COLORS.Loot)
+			end
+
+			-- Interactive
+			highlightFolder(gameSystem:FindFirstChild("InteractiveItem"), COLORS.Interactive)
+
+			-- Monsters
+			highlightFolder(gameSystem:FindFirstChild("Monsters"), COLORS.Monster)
+		end
+	end)
+end
+
+--------------------------------------------------
+-- SCAN + WATCH
+--------------------------------------------------
+local function highlightFolder(folder, color)
+	if not folder then return end
+
+	for _, obj in ipairs(folder:GetDescendants()) do
+		highlightObject(obj, color)
+	end
+end
+
+local function watchFolder(folder, color)
+	if not folder then return end
+
+	local conn = folder.DescendantAdded:Connect(function(obj)
+		task.wait()
+		if enabled then
+			highlightObject(obj, color)
+		end
+	end)
+
+	table.insert(connections, conn)
+end
+
+--------------------------------------------------
+-- CLEANUP
+--------------------------------------------------
+local function removeHighlights(root)
+	for _, obj in ipairs(root:GetDescendants()) do
+		local h = obj:FindFirstChild("ESPHighlight")
+		if h then
+			h:Destroy()
+		end
+	end
+end
+
+local function disconnectAll()
+	for _, c in ipairs(connections) do
+		c:Disconnect()
+	end
+	table.clear(connections)
+end
+
+--------------------------------------------------
+-- TOGGLE
+--------------------------------------------------
+button.MouseButton1Click:Connect(function()
+	enabled = not enabled
+	button.Text = enabled and "ESP: ON" or "ESP: OFF"
+
+	local gameSystem = workspace:FindFirstChild("GameSystem")
+	if not gameSystem then return end
+
+	if enabled then
+		-- Loot (TOOLS + MODELS)
+		local loots = gameSystem:FindFirstChild("Loots")
+		if loots then
+			local world = loots:FindFirstChild("World")
+			highlightFolder(world, COLORS.Loot)
+			watchFolder(world, COLORS.Loot)
+		end
+
+		-- Interactive (MODELS)
+		local interactive = gameSystem:FindFirstChild("InteractiveItem")
+		highlightFolder(interactive, COLORS.Interactive)
+		watchFolder(interactive, COLORS.Interactive)
+
+		-- Monsters (MODELS, RED)
+		local monsters = gameSystem:FindFirstChild("Monsters")
+		highlightFolder(monsters, COLORS.Monster)
+		watchFolder(monsters, COLORS.Monster)
+		periodicRescan(gameSystem)
+	else
+		disconnectAll()
+		removeHighlights(gameSystem)
+	end
+end)
