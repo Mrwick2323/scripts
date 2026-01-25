@@ -1,0 +1,2 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Mrwick2323/scripts/refs/heads/main/deadlydelivery/espn%20(spns)"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Mrwick2323/scripts/refs/heads/main/deadlydelivery/teleportinglooting"))()
